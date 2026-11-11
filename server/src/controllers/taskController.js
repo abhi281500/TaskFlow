@@ -10,26 +10,155 @@ export const createTask = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, message: "Task created successfully", data: task });
 });
 
+
+
 export const getTasks = asyncHandler(async (req, res) => {
-  const { search = "", status, priority, sort = "createdAt", order = "desc", page = 1, limit = 10 } = req.query;
-  const filter = { user: req.user._id };
+  const {
+    search = "",
+    status,
+    priority,
+    sort = "createdAt",
+    order = "desc",
+    page = 1,
+    limit = 10
+  } = req.query;
+
+  // Always restrict tasks to the authenticated user.
+  const filter = {
+    user: req.user._id
+  };
+
+  // Search by title (case-insensitive).
   if (search.trim()) {
-    const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    filter.title = { $regex: escaped, $options: "i" };
+    const escaped = search.trim().replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+
+    filter.title = {
+      $regex: escaped,
+      $options: "i"
+    };
   }
-  if (status && status !== "All") filter.status = status;
-  if (priority && priority !== "All") filter.priority = priority;
-  const allowedSort = ["createdAt", "dueDate", "title", "priority"];
-  const sortField = allowedSort.includes(sort) ? sort : "createdAt";
+
+  // Status filter.
+  if (status && status !== "All") {
+    filter.status = status;
+  }
+
+  // Priority filter.
+  if (priority && priority !== "All") {
+    filter.priority = priority;
+  }
+
+  // Validate sorting field.
+  const allowedSort = [
+    "createdAt",
+    "dueDate",
+    "title",
+    "priority"
+  ];
+
+  const sortField = allowedSort.includes(sort)
+    ? sort
+    : "createdAt";
+
   const sortOrder = order === "asc" ? 1 : -1;
-  const currentPage = Math.max(1, parseInt(page, 10) || 1);
-  const pageSize = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
+
+  // Validate pagination.
+  const currentPage = Math.max(
+    1,
+    parseInt(page, 10) || 1
+  );
+
+  const pageSize = Math.min(
+    50,
+    Math.max(1, parseInt(limit, 10) || 10)
+  );
+
+  const skip = (currentPage - 1) * pageSize;
+
+  // Apply custom numeric ranking for priority sorting.
+  const taskQuery =
+    sortField === "priority"
+      ? Task.aggregate([
+          {
+            $match: {
+              ...filter,
+              user: new mongoose.Types.ObjectId(
+                String(req.user._id)
+              )
+            }
+          },
+          {
+            $addFields: {
+              priorityRank: {
+                $switch: {
+                  branches: [
+                    {
+                      case: { $eq: ["$priority", "Low"] },
+                      then: 1
+                    },
+                    {
+                      case: { $eq: ["$priority", "Medium"] },
+                      then: 2
+                    },
+                    {
+                      case: { $eq: ["$priority", "High"] },
+                      then: 3
+                    }
+                  ],
+                  default: 0
+                }
+              }
+            }
+          },
+          {
+            $sort: {
+              priorityRank: sortOrder,
+              _id: -1
+            }
+          },
+          {
+            $skip: skip
+          },
+          {
+            $limit: pageSize
+          },
+          {
+            $project: {
+              priorityRank: 0
+            }
+          }
+        ])
+      : Task.find(filter)
+          .sort({
+            [sortField]: sortOrder,
+            _id: -1
+          })
+          .skip(skip)
+          .limit(pageSize);
+
+  // Fetch tasks and total count in parallel.
   const [tasks, total] = await Promise.all([
-    Task.find(filter).sort({ [sortField]: sortOrder, _id: -1 }).skip((currentPage - 1) * pageSize).limit(pageSize),
+    taskQuery,
     Task.countDocuments(filter)
   ]);
-  res.json({ success: true, data: tasks, pagination: { total, page: currentPage, limit: pageSize, pages: Math.ceil(total / pageSize) } });
+
+  res.json({
+    success: true,
+    data: tasks,
+    pagination: {
+      total,
+      page: currentPage,
+      limit: pageSize,
+      pages: Math.ceil(total / pageSize)
+    }
+  });
 });
+
+
+
 
 export const getTaskCounts = asyncHandler(async (req, res) => {
   const userId = req.user._id;
@@ -41,6 +170,8 @@ export const getTaskCounts = asyncHandler(async (req, res) => {
   ]);
   res.json({ success: true, data: { total, pending, inProgress, completed } });
 });
+
+
 
 export const getTaskById = asyncHandler(async (req, res) => {
   if (!validId(req.params.id)) return res.status(400).json({ success: false, message: "Invalid task ID" });
