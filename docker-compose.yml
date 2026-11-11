@@ -1,0 +1,47 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: taskflow-mongo
+    restart: unless-stopped
+    volumes:
+      - taskflow-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  api:
+    build: ./server
+    container_name: taskflow-api
+    restart: unless-stopped
+    environment:
+      PORT: 5001
+      MONGODB_URI: mongodb://mongo:27017/task_management
+      CLIENT_URL: http://localhost:8080
+      JWT_SECRET: ${JWT_SECRET:-local_docker_development_secret_change_me_32_chars_minimum}
+      JWT_EXPIRES_IN: 7d
+      NODE_ENV: production
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  web:
+    build:
+      context: ./client
+      args:
+        VITE_API_URL: /api
+    container_name: taskflow-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+volumes:
+  taskflow-mongo-data:
